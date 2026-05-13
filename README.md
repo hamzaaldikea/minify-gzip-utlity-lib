@@ -2,11 +2,25 @@
 
 This package contains a small Node.js utility for comparing JSON payload size across minification, gzip compression, manual decompression, and a `gaxios` read of a gzipped HTTP response.
 
+The gzip and gunzip steps use zlib's async APIs rather than `gzipSync` and `gunzipSync`. That keeps the utility non-blocking while preserving the current buffered behavior.
+
+This utility is a showcase, not a streaming transport pipeline. It intentionally reads and returns full payloads so it can compare original, minified, gzipped, and decompressed sizes side by side.
+
+When the payload comes through `gaxios`, no manual gunzip step is needed because `gaxios` already returns the decompressed response body when the server responds with `content-encoding: gzip`.
+
 ## Run
 
 ```bash
 node minify-gzip-utlity-lib.js
 ```
+
+## What It Demonstrates
+
+- Original JSON payload size
+- Minified JSON payload size
+- Gzipped minified payload size
+- Manual async gunzip back to the full JSON string
+- `gaxios` automatically returning the decompressed JSON response body
 
 ## Current Output
 

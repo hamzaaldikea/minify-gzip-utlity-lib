@@ -2,11 +2,23 @@
  * Utilities for comparing JSON payload size across minification, gzip
  * compression, and decompression steps.
  *
- * Running this file directly reads the JSON sample next to it, prints the
+ * Running this file directly reads the bundled JSON sample, prints the
  * original size, shows how much minify+gzip reduces the payload, and confirms
- * the data can still be recovered after decompression.
- * Note: no need to use the manual decompression function when fetching gzipped JSON with gaxios, since gaxios automatically returns the decompressed body when the response has a gzip content-encoding. The manual decompression function is only needed if you have a gzipped buffer that you want to decompress without using gaxios.
- * for gaxios to automatically decompress the response header needs be send the following:
+ * the payload can still be recovered after decompression.
+ *
+ * This is a buffered showcase utility. It uses zlib's async gzip/gunzip APIs
+ * to avoid blocking the event loop, but it still materializes full payloads in
+ * memory because the demo compares complete payload sizes and returns complete
+ * payloads.
+ *
+ * Note: no manual decompression step is needed when fetching gzipped JSON with
+ * gaxios, because gaxios returns the decompressed response body when the
+ * response has a gzip content-encoding. The manual decompression helper is only
+ * needed when you already have a gzipped buffer and want to inflate it without
+ * going through gaxios.
+ *
+ * For gaxios to automatically decompress the response, the server needs to send
+ * headers like:
  * {
  *       'content-type': 'application/json; charset=utf-8',
  *       'content-encoding': 'gzip',
@@ -18,8 +30,13 @@
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const { promisify } = require('util');
 const zlib = require('zlib');
 const { request } = require('gaxios');
+
+// Use async zlib operations so compression work does not block the event loop.
+const gzip = promisify(zlib.gzip);
+const gunzip = promisify(zlib.gunzip);
 
 /**
  * Format a byte count for readable console output.
@@ -61,20 +78,22 @@ function printFileSize(filePath) {
  * Compress a JSON string, optionally minifying it first.
  *
  * When `minify` is enabled, the function parses the JSON and serializes it
- * back without whitespace before producing the gzipped buffer.
+ * back without whitespace before producing the gzipped buffer. This helper is
+ * intentionally buffered: it returns both the processed JSON string and the
+ * gzipped buffer so callers can compare sizes or return the full payload.
  *
  * @param {string} jsonText
  * @param {{minify?: boolean}} [options]
- * @returns {{json: string, gzippedBuffer: Buffer}}
+ * @returns {Promise<{json: string, gzippedBuffer: Buffer}>}
  */
-function compressJson(jsonText, { minify = false } = {}) {
+async function compressJson(jsonText, { minify = false } = {}) {
   const processedJson = minify
     ? JSON.stringify(JSON.parse(jsonText))
     : jsonText;
 
   return {
     json: processedJson,
-    gzippedBuffer: zlib.gzipSync(processedJson),
+    gzippedBuffer: await gzip(processedJson),
   };
 }
 
@@ -83,14 +102,18 @@ function compressJson(jsonText, { minify = false } = {}) {
  * decompressed result. Also prints the first restored object to show the data
  * is still accessible after the round trip.
  *
+ * This is part of the demo path and intentionally reads the entire file into
+ * memory so the utility can compare complete payload sizes.
+ *
  * @param {string} filePath
+ * @returns {Promise<void>}
  */
-function printMinifiedAndGzippedSize(filePath) {
+async function printMinifiedAndGzippedSize(filePath) {
   const absolutePath = path.resolve(filePath);
   const fileContents = fs.readFileSync(absolutePath, 'utf8');
   const originalTextSize = Buffer.byteLength(fileContents);
-  const minifiedCompressed = compressJson(fileContents, { minify: true });
-  const decompressedMinifiedJson = decompressMinifiedGzipJson(
+  const minifiedCompressed = await compressJson(fileContents, { minify: true });
+  const decompressedMinifiedJson = await decompressMinifiedGzipJson(
     minifiedCompressed.gzippedBuffer,
   );
   const decompressedData = JSON.parse(decompressedMinifiedJson);
@@ -109,6 +132,9 @@ function printMinifiedAndGzippedSize(filePath) {
 
 /**
  * Start a temporary local server that responds with gzipped JSON.
+ *
+ * This is only used by the demo flow to show how gaxios handles a gzipped JSON
+ * HTTP response.
  *
  * @param {Buffer} gzippedBuffer
  * @returns {Promise<{server: import('http').Server, url: string}>}
@@ -148,7 +174,9 @@ function startGzipResponseServer(gzippedBuffer) {
  * body returned by the client.
  *
  * This demonstrates that gaxios returns the decompressed response body for a
- * standard JSON request, so no manual gunzip step is needed here.
+ * standard JSON request, so no manual gunzip step is needed here. Like the
+ * other demo helpers, it reads the full sample payload so it can print complete
+ * size comparisons.
  *
  * @param {string} filePath
  * @returns {Promise<void>}
@@ -157,7 +185,7 @@ async function printGaxiosReadSize(filePath) {
   const absolutePath = path.resolve(filePath);
   const fileContents = fs.readFileSync(absolutePath, 'utf8');
   const originalTextSize = Buffer.byteLength(fileContents);
-  const minifiedCompressed = compressJson(fileContents, { minify: true });
+  const minifiedCompressed = await compressJson(fileContents, { minify: true });
   const { server, url } = await startGzipResponseServer(
     minifiedCompressed.gzippedBuffer,
   );
@@ -198,11 +226,14 @@ async function printGaxiosReadSize(filePath) {
  * This reverses gzip compression only. If the original payload was minified
  * before compression, the returned string will still be minified JSON.
  *
+ * The helper returns the full JSON string because the current use case expects
+ * the complete payload back rather than a streaming reader.
+ *
  * @param {Buffer} gzippedMinifiedBuffer
- * @returns {string}
+ * @returns {Promise<string>}
  */
-function decompressMinifiedGzipJson(gzippedMinifiedBuffer) {
-  return zlib.gunzipSync(gzippedMinifiedBuffer).toString('utf8');
+async function decompressMinifiedGzipJson(gzippedMinifiedBuffer) {
+  return (await gunzip(gzippedMinifiedBuffer)).toString('utf8');
 }
 
 if (require.main === module) {
@@ -214,7 +245,7 @@ if (require.main === module) {
 
   (async () => {
     printFileSize(targetFilePath);
-    printMinifiedAndGzippedSize(targetFilePath);
+    await printMinifiedAndGzippedSize(targetFilePath);
     await printGaxiosReadSize(targetFilePath);
   })().catch(error => {
     console.error(error);
