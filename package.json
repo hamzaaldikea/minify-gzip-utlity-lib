@@ -1,0 +1,13 @@
+{
+    "name": "minify-gzip-utlity-lib",
+    "version": "1.0.0",
+    "private": true,
+    "type": "commonjs",
+    "main": "./minify-gzip-utlity-lib.js",
+    "scripts": {
+        "start": "node ./minify-gzip-utlity-lib.js"
+    },
+    "dependencies": {
+        "gaxios": "^7.1.1"
+    }
+}
